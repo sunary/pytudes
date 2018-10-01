@@ -7,11 +7,16 @@ import random
 
 
 CANVAS_SIZE = (700, 500)
+MOVE_SIZE = 0.5
 
 BOIDS_SIZE = (10, 10)
-MOVE_SIZE = 1.1
-COHESION_SIZE = 50
-SEPARATION_SIZE = 15
+
+SEPARATION_STRENGTH = 0.5
+SEPARATION_DISTANCE = 40.0
+COHESION_STRENGTH = 0.1
+COHESION_DISTANCE = 30.0
+ALIGNMENT_STRENGTH = 0.5
+ALIGNMENT_DISTANCE = 40.0
 
 
 class Boid(object):
@@ -33,18 +38,17 @@ class Boid(object):
                               self.triangle[2][0], self.triangle[2][1], fill='red')
 
     def update(self, boids):
-        neighbour_bolds = self.check_around(boids)
-        new_move_size = MOVE_SIZE + 1.0/(len(neighbour_bolds) + 2)
+        separation_force = self.separation(boids, SEPARATION_STRENGTH, SEPARATION_DISTANCE)
+        cohesion_force = self.cohesion(boids, COHESION_STRENGTH, COHESION_DISTANCE)
+        alignment_force = self.alignment(boids, ALIGNMENT_STRENGTH, ALIGNMENT_DISTANCE)
 
-        if len(neighbour_bolds):
-            self.angle = 0.5*self.angle + 0.5*self.alignment_angle(neighbour_bolds)
+        move = [math.cos(self.angle) * MOVE_SIZE, -math.sin(self.angle) * MOVE_SIZE]
+        move = [move[0] + separation_force[0], move[1] + separation_force[1]]
+        move = [move[0] + cohesion_force[0], move[1] + cohesion_force[1]]
+        move = [move[0] + alignment_force[0], move[1] + alignment_force[1]]
 
-        self.loc = [self.loc[0] + new_move_size * math.cos(self.angle),
-                    self.loc[1] - new_move_size * math.sin(self.angle)]
-
-        if len(neighbour_bolds):
-            cohesion_angle = self.cohesion_angle(neighbour_bolds)
-            self.separation_avoid(neighbour_bolds, move_size=MOVE_SIZE/2, temp_angle=cohesion_angle)
+        self.angle = math.atan2(move[1], move[0])
+        self.loc = [self.loc[0] + move[0], self.loc[1] + move[1]]
 
         self.update_triangle()
 
@@ -61,38 +65,47 @@ class Boid(object):
         self.triangle[2] = [self.loc[0] + 8 * math.cos(self.angle + math.pi * 7/6),
                             self.loc[1] - 8 * math.sin(self.angle + math.pi * 7/6)]
 
-    def check_around(self, boids, r=COHESION_SIZE):
-        neighbour_bolds = []
+    def separation(self, boids, strength, distance):
+        separation_force = [0, 0]
         for b in boids:
-            if (self.loc[0] - b.loc[0])**2 + (self.loc[1] - b.loc[1])**2 < r**2:
-                neighbour_bolds.append(b)
+            if self.distance(b) < distance:
+                offset = (self.loc[0] - b.loc[0], self.loc[1] - b.loc[1])
+                separation_force[0] += offset[0] / distance
+                separation_force[1] += offset[1] / distance
 
-        return neighbour_bolds
+        return separation_force[0] * strength, separation_force[1] * strength
 
-    def alignment_angle(self, neighbour_boids):
-        return sum([b.angle for b in neighbour_boids])/len(neighbour_boids)
+    def cohesion(self, boids, strength, distance):
+        average_position = [0, 0]
+        counter = 0
+        for b in boids:
+            if self.distance(b) < distance:
+                average_position[0] += b.loc[0]
+                average_position[1] += b.loc[1]
+                counter += 1
 
-    def cohesion_angle(self, neighbour_boids):
-        middle = [sum([b.loc[0] for b in neighbour_boids])/len(neighbour_boids),
-                  sum([b.loc[1] for b in neighbour_boids])/len(neighbour_boids)]
+        if counter:
+            average_position = (average_position[0]/counter, average_position[1]/counter)
 
-        return math.atan2(middle[1] - self.loc[1], middle[0] - self.loc[0])
+        cohesion_force = [average_position[0] - self.loc[0], average_position[1] - self.loc[1]]
 
-    def separation_avoid(self, neighbour_boids, move_size=MOVE_SIZE, temp_angle=None):
-        move_size_cos = math.cos(temp_angle) * move_size
-        move_size_sin = math.sin(temp_angle) * move_size
+        return cohesion_force[0] * strength/distance, cohesion_force[1] * strength/distance
 
-        for i in range(7, 1, -1):
-            has_collision = False
-            for b in neighbour_boids:
-                b_distance = (self.loc[0] + move_size_cos*i/8 - b.loc[0])**2 + (self.loc[1] - move_size_sin*i/8 - b.loc[1])**2
-                if b_distance < SEPARATION_SIZE**2:
-                    has_collision = True
-                    break
+    def alignment(self, boids, strength, distance):
+        average_angle = 0
+        counter = 0
+        for b in boids:
+            if self.distance(b) < distance:
+                average_angle += b.angle
+                counter += 1
 
-            if not has_collision:
-                self.loc = [self.loc[0] + move_size_cos*i/8, self.loc[1] - move_size_sin*i/8]
-                return
+        if counter:
+            average_angle /= counter
+
+        return [math.cos(average_angle) * MOVE_SIZE * strength, -math.sin(average_angle) * MOVE_SIZE * strength]
+
+    def distance(self, boid):
+        return math.sqrt((self.loc[0] - boid.loc[0])**2 + (self.loc[1] - boid.loc[1])**2)
 
 
 class Flocking(object):
@@ -104,7 +117,8 @@ class Flocking(object):
 
         for i in range(1, BOIDS_SIZE[0] + 1):
             for j in range(1, BOIDS_SIZE[1] + 1):
-                self.boids[(i-1) * BOIDS_SIZE[0] + (j-1)].set(loc=[i * 50, j * 50], angle=math.pi * random.randrange(-10, 10)/10)
+                self.boids[(i-1) * BOIDS_SIZE[0] + (j-1)].set(
+                    loc=[i * 50, j * 50], angle=random.uniform(-math.pi, math.pi))
 
         self.canvas = Tkinter.Canvas(self.master, width=CANVAS_SIZE[0], height=CANVAS_SIZE[1])
         self.canvas.pack()
